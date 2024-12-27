@@ -1,0 +1,5 @@
+Flask==2.3.3
+langchain==0.3.13       # Use a recent version
+openai==1.58.1
+chromadb==0.5.23         # or any vector DB you prefer
+tiktoken==0.8.0          # for token counting, often needed
