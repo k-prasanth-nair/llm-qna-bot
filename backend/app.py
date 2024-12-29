@@ -10,6 +10,9 @@ import logging
 import asyncio
 import json
 import os
+from langchain.chains import RetrievalQA
+from langchain.chat_models import ChatOpenAI
+from langchain.callbacks import AsyncIteratorCallbackHandler
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -169,79 +172,41 @@ async def search_answers_sse(
     embedding_service: FAQEmbeddingService = Depends(get_embedding_service)
 ):
     """Search for relevant FAQ answers using Server-Sent Events."""
-    async def event_generator():
+    
+    async def generate():
         try:
             logger.info(f"Starting search for query: {query}")
             
-            yield {
-                "event": "start",
-                "data": json.dumps({"status": "searching"})
-            }
+            # Get the retriever from embedding service
+            qa_chain = embedding_service.get_qa_chain()
             
-            # Get relevant documents
-            relevant_docs = embedding_service.get_relevant_chunks(
-                query,
-                k=Settings.MAX_RESULTS
+            # Create callback handler for streaming
+            callback_handler = AsyncIteratorCallbackHandler()
+            
+            # Run the chain asynchronously
+            task = asyncio.create_task(
+                qa_chain.acall(
+                    {"query": query},
+                    callbacks=[callback_handler]
+                )
             )
             
-            logger.info(f"Found {len(relevant_docs)} documents")
-
-            # Lower the threshold and check the actual score value
-            SIMILARITY_THRESHOLD = 0.3  # Lowered threshold
-            filtered_docs = []
+            # Stream the response
+            async for token in callback_handler.aiter():
+                if token:
+                    yield f"data: {token}\n\n"
             
-            for doc in relevant_docs:
-                score = doc.metadata.get('score', 0)
-                logger.info(f"Document score: {score}")  # Debug log
-                if score > SIMILARITY_THRESHOLD:
-                    filtered_docs.append(doc)
+            # Wait for completion
+            result = await task
             
-            logger.info(f"Filtered to {len(filtered_docs)} relevant documents")
-
-            if filtered_docs:
-                best_doc = filtered_docs[0]
-                content = best_doc.page_content
-                logger.info(f"Best match content: {content}")
-                
-                try:
-                    _, answer = content.split("\nA: ")
-                    result = {
-                        "answer": answer.strip(),
-                        "similarity_score": best_doc.metadata.get('score', 0.0)
-                    }
+            # Send completion message
+            yield "data: [DONE]\n\n"
                     
-                    logger.info(f"Sending result: {result}")
-                    yield {
-                        "event": "result",
-                        "data": json.dumps(result)
-                    }
-                except Exception as e:
-                    logger.error(f"Error processing document: {str(e)}")
-                    yield {
-                        "event": "error",
-                        "data": json.dumps({"error": str(e)})
-                    }
-            else:
-                logger.info("No relevant documents found")
-                yield {
-                    "event": "result",
-                    "data": json.dumps({
-                        "answer": "I'm sorry, I couldn't find a relevant answer to your question.",
-                        "similarity_score": 0.0
-                    })
-                }
-
-            yield {
-                "event": "end",
-                "data": json.dumps({"status": "completed"})
-            }
-
         except Exception as e:
             logger.error(f"Search failed: {str(e)}")
-            yield {
-                "event": "error",
-                "data": json.dumps({"error": str(e)})
-            }
+            yield f"data: Error: {str(e)}\n\n"
+            yield "data: [DONE]\n\n"
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(generate())
 
+          

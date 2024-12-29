@@ -8,8 +8,9 @@ import csv
 from dotenv import load_dotenv, find_dotenv
 from typing import List
 import logging
-
-
+from langchain.prompts import PromptTemplate
+from langchain.chains import RetrievalQA
+from langchain.chat_models import ChatOpenAI
 class FAQEmbeddingService:
     """A service for embedding FAQ data using OpenAI and Chroma vector store.
 
@@ -38,6 +39,11 @@ class FAQEmbeddingService:
             collection_name=collection_name,
             embedding_function=self.embedding,
             persist_directory=self.persist_directory
+        )
+        self.llm = ChatOpenAI(
+            temperature=0,
+            streaming=True,
+            model_name="gpt-3.5-turbo"
         )
 
     def ingest_faq_csv(
@@ -96,3 +102,33 @@ class FAQEmbeddingService:
         except Exception as e:
             logger.error(f"Error in get_relevant_chunks: {str(e)}")
             raise
+
+    def get_qa_chain(self) -> RetrievalQA:
+        """Get the QA chain for answering questions."""
+        retriever = self.vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 3}
+        )
+        
+        # Create the chain with specific configuration
+        chain = RetrievalQA.from_chain_type(
+            llm=self.llm,
+            chain_type="stuff",
+            retriever=retriever,
+            return_source_documents=False,  # Don't return source documents
+            chain_type_kwargs={
+                "prompt": PromptTemplate(
+                    template="""Use the following pieces of context to answer the question at the end. 
+                    If you don't know the answer, just say that you don't know.
+
+                    Context: {context}
+
+                    Question: {question}
+                    
+                    Answer: """,
+                    input_variables=["context", "question"]
+                )
+            }
+        )
+        
+        return chain

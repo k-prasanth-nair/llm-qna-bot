@@ -29,26 +29,34 @@
       padding: 20px;
       overflow-y: auto;
       max-height: 70vh;
+      display: flex;
+      flex-direction: column;
     }
     .chat-bubble {
-      display: inline-block;
+      display: block;
       padding: 12px 16px;
       border-radius: 16px;
       margin-bottom: 10px;
       max-width: 70%;
       line-height: 1.4;
-      white-space: pre-wrap; /* preserve line breaks, etc. */
+      word-wrap: break-word;  /* Break long words */
+      overflow-wrap: break-word;  /* Ensure words break properly */
     }
     /* Assistant bubble */
     .assistant {
       background-color: #e0e0e0;
+      color: #333;
       align-self: flex-start;
+      margin-right: auto;  /* Push to left */
+      text-align: left;    /* Ensure text aligns left */
     }
     /* User bubble */
     .user {
       background-color: #007bff;
       color: #fff;
       align-self: flex-end;
+      margin-left: auto;  /* Push to right */
+      text-align: left;   /* Keep text aligned left */
     }
     .input-area {
       display: flex;
@@ -86,7 +94,6 @@
 >
   <!-- Chat history -->
   <div class="chat-window" id="chatWindow" x-ref="chatWindow">
-    <!-- Loop through messages -->
     <template x-for="(msg, index) in messages" :key="index">
       <div 
         class="chat-bubble" 
@@ -100,7 +107,7 @@
   <div class="input-area">
     <input 
       type="text" 
-      placeholder="Type your message..." 
+      placeholder="Type your question..." 
       x-model="userQuery" 
       @keydown.enter="sendMessage" 
     />
@@ -121,6 +128,7 @@
       messages: [],
       userQuery: '',
       isLoading: false,
+      currentResponse: '',
 
       initChat() {
         this.messages.push({
@@ -132,54 +140,63 @@
       sendMessage() {
         if (!this.userQuery.trim()) return;
 
-        // Push the user's message to the chat
+        // Add user message
         this.messages.push({
           role: 'user',
-          content: this.userQuery
+          content: `${this.userQuery}`
         });
 
         const query = this.userQuery;
         this.userQuery = '';
         this.isLoading = true;
 
-        // Create a new EventSource
+        // Add assistant message placeholder
+        const assistantMessageIndex = this.messages.length;
+        this.messages.push({
+          role: 'assistant',
+          content: ''
+        });
+
+        // Reset current response
+        this.currentResponse = '';
+
         const eventSource = new EventSource(`http://localhost:8002/api/search?query=${encodeURIComponent(query)}`);
 
-        // Handle different event types
-        eventSource.addEventListener('start', (e) => {
-          console.log('Search started:', e.data);
-          // Add a loading message if you want
-          /*this.messages.push({
-            role: 'assistant',
-            content: 'Searching...'
-          });*/
-        });
+        eventSource.onmessage = (event) => {
+          if (event.data === '[DONE]') {
+            this.isLoading = false;
+            eventSource.close();
+            return;
+          }
 
-        eventSource.addEventListener('result', (e) => {
-          const result = JSON.parse(e.data);
-          console.log('Received result:', e.data);
-          console.log('Parsed result:', result)
-          // Only show the answer
-          this.messages.push({
-            role: 'assistant',
-            content: result.answer
-          });
-        });
+          try {
+            // Clean the received data and remove extra spaces
+            const cleanedData = event.data.replace('data: ', '');
+            
+            // Append new chunk to current response
+            this.currentResponse += cleanedData;
+            
+            // Update the assistant's message
+            const displayContent = this.currentResponse.replace('[DONE]', '').trim();
 
-        eventSource.addEventListener('end', (e) => {
-          console.log('Search completed:', e.data);
+            this.messages[assistantMessageIndex].content = displayContent;
+
+            // Scroll to bottom
+            this.$nextTick(() => {
+              const chatWindow = this.$refs.chatWindow;
+              chatWindow.scrollTop = chatWindow.scrollHeight;
+            });
+          } catch (error) {
+            console.error('Error processing message:', error);
+          }
+        };
+
+        eventSource.onerror = (error) => {
+          console.error('EventSource failed:', error);
           this.isLoading = false;
-          eventSource.close();
-        });
-
-        // Handle connection errors
-        eventSource.onerror = (e) => {
-          console.error('EventSource failed:', e);
-          this.isLoading = false;
-          this.messages.push({
-            role: 'assistant',
-            content: 'Sorry, there was an error connecting to the search service.'
-          });
+          if (this.currentResponse === 'A: ') {
+            this.messages[assistantMessageIndex].content = 'Sorry, there was an error processing your question.';
+          }
           eventSource.close();
         };
       }
